@@ -93,3 +93,102 @@
     last-activity: uint,
   }
 )
+
+;; Signer authorization management
+(define-map signer-permissions
+  {
+    wallet: principal,
+    signer: principal,
+  }
+  bool
+)
+
+;; Transaction queue and execution tracking
+(define-map pending-transactions
+  uint
+  {
+    sender: principal,
+    recipient: principal,
+    amount: uint,
+    signatures: uint,
+    signers: (list 10 principal),
+    created-at: uint,
+    executed: bool,
+  }
+)
+
+;; PRIVATE VALIDATION FUNCTIONS
+
+(define-private (validate-amount (amount uint))
+  (begin
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (<= amount MAX-TRANSACTION-AMOUNT) ERR-INVALID-AMOUNT)
+    (ok true)
+  )
+)
+
+(define-private (validate-pool-id (pool-id uint))
+  (begin
+    (asserts! (< pool-id MAX-POOL-ID) ERR-INVALID-MIXER-POOL)
+    (asserts! (is-none (map-get? mixer-pools pool-id)) ERR-POOL-EXISTS)
+    (ok true)
+  )
+)
+
+(define-private (validate-pool-principal (wallet principal))
+  (begin
+    (asserts! (not (is-eq wallet tx-sender)) ERR-NOT-AUTHORIZED)
+    (ok true)
+  )
+)
+
+(define-private (check-daily-limit
+    (user principal)
+    (amount uint)
+  )
+  (let (
+      (current-day (/ stacks-block-height u144))
+      (current-total (default-to u0
+        (map-get? daily-limits {
+          user: user,
+          day: current-day,
+        })
+      ))
+    )
+    (asserts! (<= (+ current-total amount) MAX-DAILY-LIMIT)
+      ERR-DAILY-LIMIT-EXCEEDED
+    )
+    (ok true)
+  )
+)
+
+(define-private (update-daily-limit
+    (user principal)
+    (amount uint)
+  )
+  (let ((current-day (/ stacks-block-height u144)))
+    (map-set daily-limits {
+      user: user,
+      day: current-day,
+    }
+      (+
+        (default-to u0
+          (map-get? daily-limits {
+            user: user,
+            day: current-day,
+          })
+        )
+        amount
+      ))
+  )
+)
+
+(define-private (check-cooling-period (wallet principal))
+  (let ((wallet-data (unwrap! (map-get? multi-sig-wallets wallet) ERR-NOT-AUTHORIZED)))
+    (asserts!
+      (>= stacks-block-height (+ (get last-activity wallet-data) COOLING-PERIOD))
+      ERR-COOLING-PERIOD
+    )
+    (ok true)
+  )
+)
