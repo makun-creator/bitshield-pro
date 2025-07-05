@@ -376,3 +376,90 @@
     )
   )
 )
+
+;; MULTI-SIGNATURE WALLET FUNCTIONS
+
+(define-public (setup-multi-sig
+    (wallet-principal principal)
+    (threshold uint)
+    (signers (list 10 principal))
+  )
+  (begin
+    ;; Principal validation
+    (try! (validate-pool-principal wallet-principal))
+    ;; System initialization check
+    (asserts! (var-get initialized) ERR-NOT-INITIALIZED)
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    ;; Threshold validation
+    (asserts! (> threshold u0) ERR-INVALID-THRESHOLD)
+    (asserts! (<= threshold (len signers)) ERR-INVALID-THRESHOLD)
+    ;; Signer validation
+    (asserts! (not (is-some (index-of signers wallet-principal)))
+      ERR-INVALID-SIGNATURE
+    )
+    ;; Duplicate signer check
+    (asserts! (not (get found-duplicate (has-duplicate-signers signers)))
+      ERR-DUPLICATE-SIGNER
+    )
+    ;; Create multi-sig wallet
+    (map-set multi-sig-wallets wallet-principal {
+      threshold: threshold,
+      total-signers: (len signers),
+      active: true,
+      last-activity: stacks-block-height,
+    })
+    ;; Set signer permissions
+    (map-set signer-permissions {
+      wallet: wallet-principal,
+      signer: tx-sender,
+    }
+      true
+    )
+    (ok true)
+  )
+)
+
+;; EMERGENCY CONTROL FUNCTIONS
+
+(define-public (pause-contract)
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (var-set contract-paused true)
+    (ok true)
+  )
+)
+
+(define-public (unpause-contract)
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+    (var-set contract-paused false)
+    (ok true)
+  )
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+(define-read-only (get-balance (user principal))
+  (default-to u0 (map-get? balances user))
+)
+
+(define-read-only (get-daily-limit-remaining (user principal))
+  (let (
+      (current-day (/ stacks-block-height u144))
+      (current-total (default-to u0
+        (map-get? daily-limits {
+          user: user,
+          day: current-day,
+        })
+      ))
+    )
+    (- MAX-DAILY-LIMIT current-total)
+  )
+)
+
+(define-read-only (get-contract-status)
+  {
+    paused: (var-get contract-paused),
+    initialized: (var-get initialized),
+  }
+)
