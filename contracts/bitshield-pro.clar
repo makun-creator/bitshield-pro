@@ -192,3 +192,103 @@
     (ok true)
   )
 )
+
+;; PRIVATE CORE LOGIC FUNCTIONS
+
+(define-private (check-balance
+    (user principal)
+    (amount uint)
+  )
+  (let ((current-balance (default-to u0 (map-get? balances user))))
+    (if (>= current-balance amount)
+      (ok true)
+      ERR-INSUFFICIENT-BALANCE
+    )
+  )
+)
+
+(define-private (update-balance
+    (user principal)
+    (amount uint)
+    (add bool)
+  )
+  (let ((current-balance (default-to u0 (map-get? balances user))))
+    (if add
+      (map-set balances user (+ current-balance amount))
+      (map-set balances user (- current-balance amount))
+    )
+  )
+)
+
+(define-private (validate-mixer-pool (pool-id uint))
+  (match (map-get? mixer-pools pool-id)
+    pool (if (and
+        (get active pool)
+        (< (get participants pool) MAX-POOL-PARTICIPANTS)
+      )
+      (ok true)
+      ERR-INVALID-MIXER-POOL
+    )
+    ERR-INVALID-MIXER-POOL
+  )
+)
+
+;; Duplicate signer detection for multi-sig security
+(define-private (has-duplicate-signers (signers (list 10 principal)))
+  (fold check-duplicates-in-remaining signers {
+    index: u0,
+    list: signers,
+    found-duplicate: false,
+  })
+)
+
+(define-private (check-duplicates-in-remaining
+    (current-signer principal)
+    (state {
+      index: uint,
+      list: (list 10 principal),
+      found-duplicate: bool,
+    })
+  )
+  (if (get found-duplicate state)
+    state
+    (let ((remaining-items (unwrap!
+        (slice? (get list state) (+ (get index state) u1) (len (get list state)))
+        state
+      )))
+      (merge state {
+        index: (+ (get index state) u1),
+        found-duplicate: (is-some (index-of remaining-items current-signer)),
+      })
+    )
+  )
+)
+
+;; PUBLIC TRANSACTION FUNCTIONS
+
+(define-public (initialize (threshold uint))
+  (begin
+    (asserts! (not (var-get initialized)) ERR-ALREADY-INITIALIZED)
+    (asserts! (> threshold u0) ERR-INVALID-THRESHOLD)
+    (var-set initialized true)
+    (var-set contract-owner tx-sender)
+    (ok true)
+  )
+)
+
+(define-public (deposit (amount uint))
+  (begin
+    ;; Amount validation
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (<= amount MAX-TRANSACTION-AMOUNT) ERR-INVALID-AMOUNT)
+    ;; System state checks
+    (asserts! (var-get initialized) ERR-NOT-INITIALIZED)
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    ;; Execute deposit with limit checks
+    (try! (validate-amount amount))
+    (try! (check-daily-limit tx-sender amount))
+    (update-balance tx-sender amount true)
+    (update-daily-limit tx-sender amount)
+    (ok true)
+  )
+)
