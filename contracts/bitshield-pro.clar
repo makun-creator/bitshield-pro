@@ -292,3 +292,87 @@
     (ok true)
   )
 )
+
+(define-public (withdraw (amount uint))
+  (begin
+    ;; Initial validation
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (var-get initialized) ERR-NOT-INITIALIZED)
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    ;; Security and balance checks
+    (try! (validate-amount amount))
+    (try! (check-daily-limit tx-sender amount))
+    (try! (check-balance tx-sender amount))
+    ;; Execute withdrawal
+    (update-balance tx-sender amount false)
+    (update-daily-limit tx-sender amount)
+    (ok true)
+  )
+)
+
+;; PRIVACY MIXING FUNCTIONS
+
+(define-public (create-mixer-pool
+    (pool-id uint)
+    (initial-amount uint)
+  )
+  (begin
+    ;; Pool ID validation
+    (asserts! (> pool-id u0) ERR-INVALID-MIXER-POOL)
+    (asserts! (< pool-id MAX-POOL-ID) ERR-INVALID-MIXER-POOL)
+    ;; System state verification
+    (asserts! (var-get initialized) ERR-NOT-INITIALIZED)
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    ;; Pool creation validation
+    (try! (validate-pool-id pool-id))
+    (try! (validate-amount initial-amount))
+    (asserts! (>= initial-amount (var-get min-mixer-amount)) ERR-INVALID-AMOUNT)
+    ;; Create new mixing pool
+    (map-set mixer-pools pool-id {
+      amount: initial-amount,
+      participants: u1,
+      participant-list: (list tx-sender),
+      active: true,
+    })
+    (ok true)
+  )
+)
+
+(define-public (join-mixer-pool
+    (pool-id uint)
+    (amount uint)
+  )
+  (begin
+    ;; Principal validation
+    (try! (validate-pool-principal tx-sender))
+    ;; System state checks
+    (asserts! (var-get initialized) ERR-NOT-INITIALIZED)
+    (asserts! (not (var-get contract-paused)) ERR-CONTRACT-PAUSED)
+    ;; Pool and transaction validation
+    (try! (validate-mixer-pool pool-id))
+    (try! (validate-amount amount))
+    (try! (check-balance tx-sender amount))
+    ;; Join pool logic
+    (let ((pool (unwrap! (map-get? mixer-pools pool-id) ERR-INVALID-MIXER-POOL)))
+      (asserts! (not (is-some (index-of (get participant-list pool) tx-sender)))
+        ERR-DUPLICATE-SIGNER
+      )
+      ;; Pool amount calculation and validation
+      (let ((new-total-amount (+ (get amount pool) amount)))
+        (asserts! (<= new-total-amount MAX-TRANSACTION-AMOUNT) ERR-INVALID-AMOUNT)
+        ;; Update pool state
+        (map-set mixer-pools pool-id {
+          amount: new-total-amount,
+          participants: (+ (get participants pool) u1),
+          participant-list: (unwrap!
+            (as-max-len? (append (get participant-list pool) tx-sender) u100)
+            ERR-POOL-FULL
+          ),
+          active: true,
+        })
+        (update-balance tx-sender amount false)
+        (ok true)
+      )
+    )
+  )
+)
